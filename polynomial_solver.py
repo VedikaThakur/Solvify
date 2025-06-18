@@ -136,7 +136,7 @@ def solve_polynomial(poly, x):
                 rounded_re = round(re_part, 3)
                 sign = '+' if rounded_im >= 0 else '-'
                 rounded_root = f"{rounded_re} {sign} {abs(rounded_im)}i"
-            steps.append(f"Root {i+1}: x = {rounded_root} (exact: {root})")
+            steps.append(f"Root {i+1}: x = {rounded_root}")
             if abs(im_part) < 1e-10:
                 real_roots.append(round(re_part, 3))
         
