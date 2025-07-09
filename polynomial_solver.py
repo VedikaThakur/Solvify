@@ -2,10 +2,12 @@ import streamlit as st
 import sympy as sp
 import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
-from pix2tex.cli import LatexOCR
+from PIL import Image, ImageEnhance
+from pix2text import Pix2Text
 import re
 import random
+
+p2t_model = Pix2Text.from_config()
 
 def generate_practice_polynomial(input_poly):
     x = sp.symbols('x')
@@ -33,6 +35,22 @@ def generate_practice_polynomial(input_poly):
         practice_poly = sum(c * x**i for i, c in enumerate(coeffs[::-1]))
         return practice_poly, x
 
+def clean_polynomial(poly_str):
+    if not poly_str:
+        return ""
+    poly_str = poly_str.strip()
+    poly_str = re.sub(r'^\$\$|\$\$$', '', poly_str)
+    poly_str = re.sub(r'\\[a-zA-Z]+\{([^}]*)\}', r'\1', poly_str)
+    poly_str = re.sub(r'\\{2,}', r'\\', poly_str)
+    poly_str = re.sub(r'\s+', ' ', poly_str)
+    poly_str = re.sub(r'\^{([^}]+)}', r'**\1', poly_str)
+    poly_str = re.sub(r'(\d*\.?\d+)\s*([xy])', r'\1*\2', poly_str)
+    poly_str = re.sub(r'\s*([+\-*/=])\s*', r'\1', poly_str)
+    poly_str = re.sub(r'\\cdot', '*', poly_str)
+    poly_str = re.sub(r'\\left|\\right', '', poly_str)
+    poly_str = poly_str.replace('^', '**').replace('{', '').replace('}', '')
+    poly_str = poly_str.replace('=', ' = ').replace('−', '-')
+    return poly_str.strip()
 def parse_polynomial(poly_str):
     try:
         poly_str = poly_str.replace('=', '').replace('−', '-').replace('\\', '').strip()
@@ -46,28 +64,22 @@ def parse_polynomial(poly_str):
         poly = sp.sympify(poly_str, locals={'x': x, 'pi': pi, 'E': e})
         return poly, x
     except Exception as e:
-        st.error(f"Error parsing polynomial: {e}. Please enter a valid polynomial (e.g., x**2 - 1, pi*x**2 + sqrt(2)*x - e, or x**3 - 7*x**2 + 7*x - 7).")
+        st.error(f"Error parsing polynomial: {e}. Please enter a valid polynomial (e.g., x^3 - 6 * x^2 + 11 * x - 6).")
         return None, None
-
+def preprocess_image(image):
+    image = image.convert('L')
+    enhancer = ImageEnhance.Contrast(image)
+    image = enhancer.enhance(2.0)
+    return image
 def extract_equations_from_image(image):
     try:
-        model = LatexOCR()
-        latex_text = model(image)
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        image = preprocess_image(image)
+        latex_text = p2t_model.recognize_text_formula(image)
         st.write(f"**Raw LaTeX extracted**: {latex_text}")
-        latex_text = latex_text.replace('$', '').strip()
-        latex_text = re.sub(r'\\begin\{align\*?\}.*?\\end\{align\*?\}', '', latex_text, flags=re.DOTALL)
-        latex_text = re.sub(r'\\begin\{equation\*?\}.*?\\end\{equation\*?\}', '', latex_text, flags=re.DOTALL)
-        latex_text = re.sub(r'\\\[|\\\]', '', latex_text)
-        latex_text = re.sub(r'=', '', latex_text)
-        latex_text = re.sub(r'\\left\(|\\right\)', '', latex_text)
-        latex_text = latex_text.replace('\\cdot', '*')
-        latex_text = re.sub(r'\^{(.*?)}', r'^\1', latex_text)
-        latex_text = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', latex_text)
-        latex_text = re.sub(r'\{|\}', '', latex_text)
-        latex_text = re.sub(r'\\pi', 'pi', latex_text)
-        latex_text = re.sub(r'\\sqrt\{(\d+)\}', r'sqrt(\1)', latex_text)
-        latex_text = re.sub(r'\\e', 'E', latex_text)
-        return latex_text
+        cleaned = clean_polynomial(latex_text)
+        return cleaned
     except Exception as e:
         st.error(f"Error processing image: {e}")
         return None
@@ -136,7 +148,7 @@ def solve_polynomial(poly, x):
                 rounded_re = round(re_part, 3)
                 sign = '+' if rounded_im >= 0 else '-'
                 rounded_root = f"{rounded_re} {sign} {abs(rounded_im)}i"
-            steps.append(f"Root {i+1}: x = {rounded_root}")
+            steps.append(f"Root {i+1}: x = {rounded_root} ")
             if abs(im_part) < 1e-10:
                 real_roots.append(round(re_part, 3))
         
@@ -194,18 +206,18 @@ def polynomial_solver_tab():
     x = sp.symbols('x')
 
     if input_method == "Text":
-        poly_str = st.text_input("Enter a polynomial (e.g., x**2 - 1, pi*x**2 + sqrt(2)*x - e, or x**3 - 7*x**2 + 7*x - 7):")
+        poly_str = st.text_input("Enter a polynomial (e.g., x^3 - 6 * x^2 + 11 * x - 6):")
         if poly_str:
             poly, x = parse_polynomial(poly_str)
     elif input_method == "Image":
         uploaded_file = st.file_uploader("Upload an image containing a polynomial:", type=["png", "jpg", "jpeg"])
         if uploaded_file:
             image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Image", use_column_width=True)
+            st.image(image, caption="Uploaded Image", use_container_width=True)
             poly_str = extract_equations_from_image(image)
             if poly_str:
                 st.write(f"Extracted polynomial: {poly_str}")
-                poly, x = parse_polynomial(poly_str)
+                poly, x = parse_polynomial(poly_str)  
 
     if poly:
         st.subheader("Step-by-Step Solution for Input Polynomial")
@@ -229,4 +241,6 @@ def polynomial_solver_tab():
                 st.subheader("Graph of the Practice Polynomial")
                 plot_polynomial(practice_poly, x, practice_real_roots)
 
-    st.markdown("**Note**: For image input, ensure the polynomial is clearly written without '=0' (e.g., x^2 + 2x - 5) and use pi, sqrt(n), or e for constants. For text input, use ** for powers (e.g., x**2) and pi, sqrt(n), or e (e.g., pi*x**2 + sqrt(2)*x - e).")
+    st.markdown("**Note**: For image input, ensure the polynomial is clearly written without '=0' (e.g., x^2 + 2 * x - 5). For text input, use ^ for powers and * for multiplication of coefficients (e.g., 3 * x^2 + sqrt(2)*x - 5).")
+
+
