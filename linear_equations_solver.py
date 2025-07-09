@@ -2,36 +2,43 @@ import streamlit as st
 import sympy as sp
 import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
-from pix2tex.cli import LatexOCR
+from PIL import Image, ImageEnhance
+from pix2text import Pix2Text
 import re
 import random
 from PIL import ImageEnhance
-
+p2t_model = Pix2Text.from_config()
 def parse_linear_equations(eqn_str):
     try:
+        eqn_str = eqn_str.strip()
+        cleaned_str = re.sub(r'^\$\$|\$\$$', '', eqn_str)
+        cleaned_str = re.sub(r'\\[a-zA-Z]+\{([^}]*)\}', r'\1', cleaned_str)
+        cleaned_str = re.sub(r'\\{2,}', r'\\', cleaned_str)
+        cleaned_str = re.sub(r'\s+', ' ', cleaned_str)
+        cleaned_str = re.sub(r'\^{([^}]+)}', r'**\1', cleaned_str)
+        cleaned_str = re.sub(r'(\d*\.?\d+)\s*([xy])', r'\1*\2', cleaned_str)
+        cleaned_str = re.sub(r'\s*([+\-*/=])\s*', r'\1', cleaned_str)
+        cleaned_str = re.sub(r'\\cdot', '*', cleaned_str)
+        cleaned_str = re.sub(r'\\left|\\right', '', cleaned_str)
+        cleaned_str = cleaned_str.replace('^', '**').replace('{', '').replace('}', '')
+        cleaned_str = cleaned_str.replace('−', '-')
+        cleaned_str = cleaned_str.strip()
+
+        equations_list = [e.strip() for e in cleaned_str.split(',')]
+        if len(equations_list) != 2:
+            raise ValueError("Please enter exactly two equations separated by a comma.")
+
         x, y = sp.symbols('x y')
-        possible_separators = [',', '\\\\', '&', r'\n']
-        eqns = None
-        for sep in possible_separators:
-            if re.search(sep, eqn_str):
-                eqns = [e.strip() for e in re.split(sep, eqn_str) if e.strip()]
-                break
-        if not eqns:
-            eqns = [eqn_str.strip()]
-        if len(eqns) != 2:
-            raise ValueError(f"Expected exactly two equations, but found {len(eqns)}. Please separate equations with a comma, newline, or LaTeX separator (e.g., 'x + y = 2, x - y = 0').")
-        equations = []
-        for eqn in eqns:
-            sides = eqn.split('=')
-            if len(sides) != 2:
-                raise ValueError(f"Invalid equation format: {eqn}. Each equation must contain exactly one '=' sign.")
-            expr = sp.sympify(sides[0].replace(' ', '') + '-(' + sides[1].replace(' ', '') + ')', locals={'x': x, 'y': y, 'pi': sp.pi, 'E': sp.E})
-            equations.append(expr)
-        return equations, x, y
+        parsed_eqs = []
+        for eq in equations_list:
+            lhs, rhs = eq.split('=')
+            parsed_eqs.append(sp.sympify(lhs) - sp.sympify(rhs))
+
+        return parsed_eqs, x, y
     except Exception as e:
-        st.error(f"Error parsing linear equations: {e}")
+        st.error(f"Error parsing equations: {e}")
         return None, None, None
+
 
 def preprocess_image(image):
     # Convert to grayscale and enhance contrast
@@ -42,27 +49,15 @@ def preprocess_image(image):
 
 def extract_equations_from_image(image):
     try:
-        # Preprocess the image
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
         image = preprocess_image(image)
-        model = LatexOCR()
-        latex_text = model(image)
-        st.write(f"**Raw LaTeX extracted**: {latex_text}")
-        latex_text = latex_text.replace('$', '').strip()
-        latex_text = re.sub(r'\\begin\{align\*?\}.*?\\end\{align\*?\}', '', latex_text, flags=re.DOTALL)
-        latex_text = re.sub(r'\\begin\{equation\*?\}.*?\\end\{equation\*?\}', '', latex_text, flags=re.DOTALL)
-        latex_text = re.sub(r'\\\[|\\\]', '', latex_text)
-        latex_text = re.sub(r'=', '=', latex_text)  # Retain '=' for parsing
-        latex_text = re.sub(r'\\left\(|\\right\)', '', latex_text)
-        latex_text = latex_text.replace('\\cdot', '*')
-        latex_text = re.sub(r'\^{(.*?)}', r'^\1', latex_text)
-        latex_text = re.sub(r'(\d)([a-zA-Z])', r'\1*\2', latex_text)
-        latex_text = re.sub(r'\{|\}', '', latex_text)
-        latex_text = re.sub(r'\\pi', 'pi', latex_text)
-        latex_text = re.sub(r'\\sqrt\{(\d+)\}', r'sqrt(\1)', latex_text)
-        latex_text = re.sub(r'\\e', 'E', latex_text)
-        return latex_text
+        eqn_str = p2t_model.recognize_text_formula(image)
+        st.write(f"**Raw LaTeX extracted**: {eqn_str}")
+        cleaned = parse_linear_equations(eqn_str)
+        return cleaned
     except Exception as e:
-        st.error(f"Error processing image: {e}. Ensure the image is clear, with high contrast and legible text.")
+        st.error(f"Error processing image: {e}")
         return None
 
 def solve_linear_equations(equations, x, y):
